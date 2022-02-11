@@ -34,6 +34,14 @@ class Singer:
         self.target.initialize()
 
     def save_state(self, path: str):
+        """Saves the state from when the last call to run or run_unsafe was executed
+
+        Args:
+            path (str): Absolute path to save the file to
+
+        Raises:
+            ValueError: There isnt a state to be save. Run run() or run_unsafe() first
+        """
         if self.end_state:
             with open(path, "w") as f:
                 f.write(json.dumps(self.end_state))
@@ -43,6 +51,46 @@ class Singer:
             )
 
     def run(self) -> Optional[Dict[str, Any]]:
+        """This runs the tap into the target. Guarantees that the process will stop
+
+        Raises:
+            RuntimeError: Either tap or target has failed to execute
+
+        Returns:
+            Optional[Dict[str, Any]]: Last state returned by the ingestion
+        """
+        logging.info(f"Running {self.tap.tap_name} | {self.target.target_name}")
+        cmd = f"{self.tap.run_cmd} | {self.target.run_cmd};"
+        proc = subprocess.run(cmd, capture_output=True, shell=True)
+        stdout = proc.stdout.decode("utf-8").splitlines()
+        stderr = proc.stderr.decode("utf-8").splitlines()
+
+        if proc.returncode > 0:
+            for line in stderr:
+                logging.error(line)
+            raise RuntimeError(
+                f"Failed to execute {self.tap.tap_name} | {self.target.target_name}"
+            )
+        logging.info(f"Finished {self.tap.tap_name} | {self.target.target_name}")
+
+        try:
+            state = json.loads(stdout[-1])
+        except Exception:
+            state = None
+
+        return state or {}
+
+    def run_unsafe(self) -> Optional[Dict[str, Any]]:
+        """This runs the tap into the target. Does not guarantees that the process will
+        not hang in an infinite wait. Use this if you need more info on failure
+
+        Raises:
+            TapRuntimeError: Tap failed to execute for any reason
+            TargetRuntimeError: Target failed to execute for any reason
+
+        Returns:
+            Optional[Dict[str, Any]]: Last state returned by the ingestion
+        """
         logging.info(f"Running {self.tap.tap_name} | {self.target.target_name}")
         tap_proc = subprocess.Popen(self.tap.run_cmd.split(), stdout=subprocess.PIPE)
 
